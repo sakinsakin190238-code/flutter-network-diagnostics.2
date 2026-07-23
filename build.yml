@@ -1,0 +1,140 @@
+name: Build CyberNet Diagnostics APK
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.22.0'
+          cache: true
+
+      - name: Verify Flutter installation
+        run: flutter doctor -v
+
+      - name: Generate native Android project files
+        # This repo only ships lib/main.dart + pubspec.yaml. `flutter create .`
+        # scaffolds the missing android/ directory (and support files) in
+        # place WITHOUT overwriting our existing lib/main.dart or pubspec.yaml
+        # -- this is Flutter's officially supported "add a platform to an
+        # existing project" workflow.
+        run: |
+          flutter create . \
+            --platforms=android \
+            --org com.cybernet.diagnostics \
+            --project-name cybernet_diagnostics
+
+      - name: Inject required Android permissions
+        # flutter create generates a manifest with zero <uses-permission>
+        # entries. The app needs INTERNET + ACCESS_NETWORK_STATE for the
+        # port scanner, DNS lookup, and connectivity/public-IP checks to
+        # function at runtime. Done via Python (not sed) to avoid any risk
+        # of mangled escape sequences corrupting the XML.
+        run: |
+          python3 - <<'PYEOF'
+          path = "android/app/src/main/AndroidManifest.xml"
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          permissions = (
+              '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n'
+          )
+
+          if "android.permission.INTERNET" not in content:
+              marker = "</manifest>"
+              idx = content.rfind(marker)
+              if idx == -1:
+                  raise SystemExit("ERROR: </manifest> not found in AndroidManifest.xml")
+              content = content[:idx] + permissions + content[idx:]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("Injected INTERNET / ACCESS_NETWORK_STATE permissions.")
+          else:
+              print("Permissions already present, skipping.")
+
+          print("----- Final AndroidManifest.xml -----")
+          print(content)
+          PYEOF
+
+      - name: Replace default smoke test with an app-appropriate one
+        # flutter create also scaffolds test/widget_test.dart referencing a
+        # default counter app (MyApp) that does not exist in this project.
+        # Left as-is, `flutter analyze` would hard-fail on it (unlike
+        # warnings, compile errors are never suppressed by the
+        # --no-fatal-* flags). Replace it with a minimal, valid smoke test
+        # for the real app entry point instead.
+        run: |
+          mkdir -p test
+          cat > test/widget_test.dart <<'DARTEOF'
+          import 'package:flutter/material.dart';
+          import 'package:flutter_test/flutter_test.dart';
+          import 'package:cybernet_diagnostics/main.dart';
+
+          void main() {
+            testWidgets('CyberNet Diagnostics boots and shows the dashboard', (WidgetTester tester) async {
+              // DashboardPage fires real async network calls (Dio + http) from
+              // initState. A plain pumpWidget runs inside flutter_test's fake-clock
+              // zone, where those real Timers never fire, causing a "pending timer"
+              // failure at teardown. runAsync lets the real async work actually
+              // resolve (success or caught timeout) before the test completes.
+              await tester.runAsync(() async {
+                await tester.pumpWidget(const CyberNetApp());
+                await tester.pump(const Duration(seconds: 7));
+              });
+              expect(find.text('CYBERNET // DASHBOARD'), findsOneWidget);
+              expect(find.byType(NavigationBar), findsOneWidget);
+            });
+          }
+          DARTEOF
+
+      - name: Set minSdkVersion (required by device_info_plus / dio)
+        run: |
+          GRADLE_FILE="android/app/build.gradle"
+          if [ -f "$GRADLE_FILE" ]; then
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/' "$GRADLE_FILE" || true
+          fi
+          GRADLE_KTS_FILE="android/app/build.gradle.kts"
+          if [ -f "$GRADLE_KTS_FILE" ]; then
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/' "$GRADLE_KTS_FILE" || true
+          fi
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Static analysis
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Run unit tests
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cybernet-diagnostics-release-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 14
