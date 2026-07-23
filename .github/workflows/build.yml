@@ -29,6 +29,10 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
+      # 🔥 মিসিং অ্যান্ড্রয়েড প্ল্যাটফর্ম ফাইল অটো জেনারেট করার জন্য এই ধাপটি যোগ করা হয়েছে
+      - name: Reconstruct Android Platform Files
+        run: flutter create . --platforms=android
+
       - name: Build Release APK
         run: flutter build apk --release
 
