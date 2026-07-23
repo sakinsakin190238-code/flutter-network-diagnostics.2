@@ -1,0 +1,25 @@
+name: cybernet_diagnostics
+description: "CyberNet Diagnostics - Cyberpunk-themed Android network diagnostic utility."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  dio: ^5.4.3+1
+  http: ^1.2.1
+  crypto: ^3.0.3
+  device_info_plus: ^10.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
